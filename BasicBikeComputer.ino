@@ -105,8 +105,8 @@ void setup()
 	pinMode(OVERIDE_PIN, INPUT_PULLUP);	// Use internal pullups
 	pinMode(THROTTLE_PIN, OUTPUT);
 	pinMode(LCD_LIGHT_PIN, OUTPUT);
-	//digitalWrite(LCD_LIGHT_PIN, HIGH);
-
+	digitalWrite(LCD_LIGHT_PIN, HIGH);
+	
 	Serial.begin(9600);
 	Serial.println("ideaHex Throttle Test");
 	Serial.println("Visit ideahex.com\r\n");
@@ -139,6 +139,7 @@ void setup()
 
 void loop()
 {
+	unsigned char brightness;
 	unsigned long currentMillis = millis();
 	if(currentMillis - previousMillis >= interval)
 	{
@@ -176,7 +177,9 @@ void loop()
 	if(millis() - cadenceInterruptMillis > MAX_CADENCE_PERIOD)
 	{
 		throttleValue = THROTTLE_OFF;
+		//throttleValue++;
 	}
+	
 	// Check if an interrupt has occured
 	if(cadenceInteruptFlag == HIGH)
 	{
