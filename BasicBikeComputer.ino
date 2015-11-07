@@ -40,10 +40,10 @@ const int	MOSI_PIN		=11;	// Master Oout Slave In for SPI, LCD and SD Card
 const int	MISO_PIN		=12;	// Master In Slave Out for SPI, LCD and SD Card
 const int	SCK_PIN			=13;	// Clock for SPI, LCD and SD Card
 // Switches
-const int	SW1_PIN			=A0;	// Use Pin Change Interupts
-const int	SW2_PIN			=A1;	// Use Pin Change Interupts
-const int	SW3_PIN			=A2;	// Use Pin Change Interupts
-const int	SW4_PIN			=A3;	// Use Pin Change Interupts
+const int	SW_UP_PIN			=A0;	// Use Pin Change Interupts
+const int	SW_DOWN_PIN			=A1;	// Use Pin Change Interupts
+const int	SW_LEFT_PIN			=A2;	// Use Pin Change Interupts
+const int	SW_RIGHT_PIN			=A3;	// Use Pin Change Interupts
 // Battery Monitoring
 const int	BATT_V_PIN		=A4;	// E-Bike Battery Voltage
 const int	BATT_A_PIN		=A5;	// E-Bike Battery Current
@@ -73,8 +73,86 @@ const int CADENCE_MAX	=80;	// cadence value that will result in full throttle
 const int MAX_CADENCE_PERIOD =60000/(CADENCE_MIN *CADENCE_MAGNETS);	// Convert rpm to period
 const int THROTTLE_STEP =(THROTTLE_MAX-THROTTLE_MIN)/(CADENCE_MAX-CADENCE_MIN);	// Throttle ramp value
 
+// Current sensor is Alegro ACS 756
+// Ratio = 40mV/Amp ??????
+// Aref = 5V
+// bits = 10
+// (Aref/2^bits) /(Ratio/1000)*1000
+const float CURRENT_MULTIPLIER = 0.122;
+const int CURRENT_OFFSET = 511;
+
+// Voltage divider
+// Rtop 100k Rbot 10K	
+// Aref = 5V
+// bits = 10
+// (Aref/2^bits)/(Rbot/(Rtop + Rbot)) = 
+const float VoltageMultiplier = 0.0537109375;
+
+// Menu Items
+
+
+// Displayable items
+// Cadence
+// Ground Speed, Not yet Implemented
+// Battery Voltage
+// Current
+// Time
+// Amp Hours
+// Input Power
+// Output Power, Not yet Implemented requires wheel speed
+// Torque, Not yet Implemented requires calibration
+// Motor Speed, Not yet Implemented need programming
+// Throttle Value
+
+
+// Electrical Power
+// 		Voltage 
+//			Current
+// 		Power
+
+// Motor:
+//			Output Power
+// 		Torque 
+//			Motor rpm
+
+// Rider:
+// 		Cadence 
+// 		Ground Speed
+//			Trip time
+// 		Throttle
+//			Assist Level
+
+// Battery Usage:
+// 		Current Amps
+// 		Amp hours used
+// 		Amp hours Remaining
+// 		Battery Voltage
+char* menuNames[]={"POWER", "MOTOR", "RIDER", "BATTERY"};
+char* displayNames[]={"Amps ", "RPM  ", "Thrt ", "kM/H", "Volts", "Min", "AH", "Watts", "Watts", "N.M", "RPM"};
+volatile int currentMenu = 0;
+const int MENU_SIZE = 4;
+const int NUM_DISPLAY_ITEMS = 11;
+	int currentDisplay = 0;
+
+//#define MENU_POWER 	0
+//#define MENU_MOTOR		1
+
+
 // Global Variables //
 volatile int throttleValue = 0;
+
+// Switch Variables
+volatile int switchUpState;
+volatile int previousSwitchUpState = HIGH;
+volatile long switchUpDebounceTime = 0;
+volatile int switchDownState;
+volatile int previousSwitchDownState;
+volatile int switchLeftState;
+volatile int previousSwitchLeftState;
+volatile int switchRightState;
+volatile int previousSwitchRightState;
+const long debounceDelay = 50;
+
 
 // Cadence Variables
 volatile float currentCadence = 0;
@@ -85,8 +163,10 @@ volatile long cadenceNegativeTimer = 0;
 volatile long cadenceNegativePeriod = 0;
 volatile int cadenceInteruptFlag = 0;
 
-unsigned long cadenceInterruptMillis = 0;
-int outputValue=0;
+volatile unsigned long cadenceInterruptMillis = 0;
+volatile int outputValue=0;
+
+volatile unsigned int BacklightState = HIGH;
 
 // Variables will change :
 int ledState = LOW;             // ledState used to set the LED
@@ -105,7 +185,12 @@ void setup()
 	pinMode(OVERIDE_PIN, INPUT_PULLUP);	// Use internal pullups
 	pinMode(THROTTLE_PIN, OUTPUT);
 	pinMode(LCD_LIGHT_PIN, OUTPUT);
-	digitalWrite(LCD_LIGHT_PIN, HIGH);
+	digitalWrite(LCD_LIGHT_PIN, BacklightState);
+	pinMode(SW_UP_PIN, INPUT_PULLUP);	// Use internal pullups
+	pinMode(SW_DOWN_PIN, INPUT_PULLUP);	// Use internal pullups
+	pinMode(SW_LEFT_PIN, INPUT_PULLUP);	// Use internal pullups
+	pinMode(SW_RIGHT_PIN, INPUT_PULLUP);	// Use internal pullups
+	
 	
 	Serial.begin(9600);
 	Serial.println("ideaHex Throttle Test");
@@ -130,7 +215,7 @@ void setup()
 	LCD_disp.println("Controller");
 
 	LCD_disp.display(); // show splashscreen
-	delay(5000);
+	//delay(5000);
 	//LCD_disp.clearDisplay();   // clears the screen and buffer
 
 
@@ -140,32 +225,42 @@ void setup()
 void loop()
 {
 	unsigned char brightness;
-	unsigned long currentMillis = millis();
+	long currentMillis = millis();
+	int sensorValue;// = (analogRead(CURRENT_PIN)  - CurrentOffset) * CurrentMultiplier;
+	
+	checkSwitches ();
+
 	if(currentMillis - previousMillis >= interval)
 	{
-
+		// Display Current in Amps
 		LCD_disp.clearDisplay();   // clears the screen and buffer
 		LCD_disp.setCursor(0,0);
 		LCD_disp.setTextSize(1);
-		LCD_disp.print("RPM:");
+		LCD_disp.print(displayNames[0]);	// Display "Amps"
 		LCD_disp.setTextSize(2);
-		LCD_disp.println("220.0");//currentCadence,1);
+		sensorValue =analogRead(BATT_A_PIN	);
+		LCD_disp.println( (sensorValue - CURRENT_OFFSET) * CURRENT_MULTIPLIER ,1);
+
+		// Display Cadence
+		LCD_disp.setCursor(0,17);
 		LCD_disp.setTextSize(1);
-		LCD_disp.print("PWR:");
+		LCD_disp.print(displayNames[1]);	// Display "RPM"
+		LCD_disp.setTextSize(2);
+		if(currentCadence >= 99.9) {LCD_disp.println( currentCadence,0);}
+		else {LCD_disp.println( currentCadence,1);}
+
+		// Display Throttle setting
+		LCD_disp.setCursor(0,34);
+		LCD_disp.setTextSize(1);
+		LCD_disp.print(displayNames[2]);	// Display "Throttle"
 		LCD_disp.setTextSize(2);
 		LCD_disp.println(throttleValue);
 		LCD_disp.display();
-
-		// save the last time you blinked the LED
+		
+		// save the last time you updated the display
 		previousMillis = currentMillis;
 	}
 
-	//if(outputValue++ >= 255) outputValue = 0;
-	//analogWrite(THROTTLE_PIN, outputValue);
-	//Serial.print("V");
-	//Serial.print(outputValue);
-	//Serial.print(":\n");
-	//delay(10);
 	// Just set Throttle to Max if Over ride pressed
 	while(digitalRead(OVERIDE_PIN)==LOW)	// Switch pulls to ground when pressed
 	{
@@ -177,22 +272,21 @@ void loop()
 	if(millis() - cadenceInterruptMillis > MAX_CADENCE_PERIOD)
 	{
 		throttleValue = THROTTLE_OFF;
-		//throttleValue++;
 	}
 	
 	// Check if an interrupt has occured
 	if(cadenceInteruptFlag == HIGH)
 	{
-		cadenceInterruptMillis = millis(); // reset time since last interrupt for min rpm
-		ProcessCadence();	// Update cadence rpm value
-		cadenceInteruptFlag = LOW; // reset flag
-			Serial.print("cad = ");
-			Serial.print(currentCadence,1);	// Show 1 decimal place
+		cadenceInterruptMillis = millis();	 // reset time since last interrupt for min rpm
+		ProcessCadence();							// Update cadence rpm value
+		cadenceInteruptFlag = LOW;			 // reset flag
+		//	Serial.print("cad = ");
+		//	Serial.print(currentCadence,1);		// Show 1 decimal place
 		if(currentCadence > CADENCE_MAX) throttleValue = THROTTLE_MAX;
 		else if(currentCadence < CADENCE_MIN) throttleValue = THROTTLE_OFF;
 		else throttleValue = ((currentCadence-CADENCE_MIN)*THROTTLE_STEP)+THROTTLE_MIN;
-			Serial.print(", Throttle = ");
-			Serial.println(throttleValue);
+		//	Serial.print(", Throttle = ");
+		//	Serial.println(throttleValue);
 	}
 	analogWrite(THROTTLE_PIN, throttleValue); // Actualy output the throttle value
 }
@@ -227,6 +321,53 @@ void ProcessCadence()
 
 
 
+void checkSwitches (void)
+{
+	int swReading = digitalRead(SW_UP_PIN);		// Read the switch state into a temp variable
+	if (swReading != previousSwitchUpState) 	switchUpDebounceTime = millis();    // reset the debouncing timer
+	if ((millis() - switchUpDebounceTime) > debounceDelay) // Debounce time is over so take this as the current state of the switch
+	{
+		if (swReading != switchUpState)	// Confirm if switch state has changed
+		{
+			switchUpState = swReading;		// Save state of the switch
+		}
+    }
+    previousSwitchUpState = swReading;
+    
+
+    
+/*
+	// Read the state ot the switches
+	switchUpState = digitalRead(SW_UP_PIN);
+	switchDownState = digitalRead(SW_DOWN_PIN);
+	switchLeftState = digitalRead(SW_LEFT_PIN);
+	switchRightState = digitalRead(SW_RIGHT_PIN);
+
+  // If the switch changed, due to noise or pressing:
+	if (switchUpState != previousSwitchUpState) 								switchUpDebounceTime = millis();    // reset the debouncing timer
+	if (previousSwitchDownState != previousSwitchDownState) 	switchDownDebounceTime = millis();    // reset the debouncing timer
+	if (previousSwitchLeftState != previousSwitchLeftState) 			switchLeftDebounceTime = millis();    // reset the debouncing timer
+	if (previousSwitchRightState != previousSwitchRightState) 		switchRightDebounceTime = millis();    // reset the debouncing timer
+
+  if ((millis() - lswitchUpDebounceTime) > debounceDelay) 
+  {
+    // whatever the reading is at, it's been there for longer
+    // than the debounce delay, so take it as the actual current state:
+
+    // if the button state has changed:
+    if (reading != buttonState) {
+      buttonState = reading;
+
+      // only toggle the LED if the new button state is HIGH
+      if (buttonState == HIGH) {
+        ledState = !ledState;
+      }
+    }
+  }
+
+
+*/
+}
 
 
 
